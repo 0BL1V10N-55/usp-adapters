@@ -53,7 +53,6 @@ const (
 	defaultMaxRetryAttempts = 3
 	defaultRetryBaseDelay   = 5 * time.Second
 	defaultMaxRetryDelay    = 30 * time.Second
-	defaultWindow           = 5 * time.Minute
 	defaultOffsetField      = "offset"
 	defaultPageSizeField    = "limit"
 	defaultStartTimeField   = "startTime"
@@ -432,9 +431,11 @@ type PasswordSafeConfig struct {
 	Deduper utils.Deduper `json:"-" yaml:"-"`
 }
 
-// defaultFeeds returns the default Password Safe security feed:
+// defaultFeeds returns the default Password Safe security feeds:
 //
-//   - sessions: privileged-access checkout sessions (account check-out/in events).
+//   - sessions:  privileged-access checkout sessions (account check-out/in events).
+//   - requests:  credential requests and approvals — who requested access to what
+//     privileged account, whether it was approved or denied, and by whom.
 func defaultFeeds() []PasswordSafeFeed {
 	return []PasswordSafeFeed{
 		{
@@ -442,6 +443,12 @@ func defaultFeeds() []PasswordSafeFeed {
 			Path:           "BeyondTrust/api/public/v3/Sessions",
 			TimestampField: "startTime",
 			IDField:        "sessionID",
+		},
+		{
+			Name:           "requests",
+			Path:           "BeyondTrust/api/public/v3/Requests",
+			TimestampField: "requestedDate",
+			IDField:        "requestID",
 		},
 	}
 }
