@@ -19,6 +19,9 @@ import (
 	"github.com/refractionPOINT/usp-adapters/1password"
 	"github.com/refractionPOINT/usp-adapters/azure_event_hub"
 	usp_bigquery "github.com/refractionPOINT/usp-adapters/bigquery"
+	"github.com/refractionPOINT/usp-adapters/beyondtrust"
+	"github.com/refractionPOINT/usp-adapters/beyondtrust_passwordsafe"
+	"github.com/refractionPOINT/usp-adapters/beyondtrust_pra"
 	"github.com/refractionPOINT/usp-adapters/bitwarden"
 	"github.com/refractionPOINT/usp-adapters/box"
 	"github.com/refractionPOINT/usp-adapters/cato"
@@ -498,6 +501,21 @@ func runAdapter(ctx context.Context, method string, configs Configuration, showC
 		configs.ThreatLocker.ClientOptions.Architecture = "usp_adapter"
 		configToShow = configs.ThreatLocker
 		client, chRunning, err = usp_threatlocker.NewThreatLockerAdapter(ctx, configs.ThreatLocker)
+	} else if method == "beyondtrust" {
+		configs.BeyondTrust.ClientOptions = applyLogging(configs.BeyondTrust.ClientOptions)
+		configs.BeyondTrust.ClientOptions.Architecture = "usp_adapter"
+		configToShow = configs.BeyondTrust
+		client, chRunning, err = usp_beyondtrust.NewBeyondTrustAdapter(ctx, configs.BeyondTrust)
+	} else if method == "beyondtrust_passwordsafe" {
+		configs.BeyondTrustPassSafe.ClientOptions = applyLogging(configs.BeyondTrustPassSafe.ClientOptions)
+		configs.BeyondTrustPassSafe.ClientOptions.Architecture = "usp_adapter"
+		configToShow = configs.BeyondTrustPassSafe
+		client, chRunning, err = usp_beyondtrust_passwordsafe.NewPasswordSafeAdapter(ctx, configs.BeyondTrustPassSafe)
+	} else if method == "beyondtrust_pra" {
+		configs.BeyondTrustPRA.ClientOptions = applyLogging(configs.BeyondTrustPRA.ClientOptions)
+		configs.BeyondTrustPRA.ClientOptions.Architecture = "usp_adapter"
+		configToShow = configs.BeyondTrustPRA
+		client, chRunning, err = usp_beyondtrust_pra.NewPRAAdapter(ctx, configs.BeyondTrustPRA)
 	} else {
 		return nil, nil, errors.New(logError("unknown adapter_type: %s", method))
 	}

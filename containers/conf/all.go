@@ -5,6 +5,9 @@ import (
 
 	"github.com/refractionPOINT/usp-adapters/1password"
 	"github.com/refractionPOINT/usp-adapters/azure_event_hub"
+	"github.com/refractionPOINT/usp-adapters/beyondtrust"
+	"github.com/refractionPOINT/usp-adapters/beyondtrust_passwordsafe"
+	"github.com/refractionPOINT/usp-adapters/beyondtrust_pra"
 	"github.com/refractionPOINT/usp-adapters/bitwarden"
 	"github.com/refractionPOINT/usp-adapters/box"
 	"github.com/refractionPOINT/usp-adapters/cato"
@@ -54,7 +57,10 @@ type GeneralConfigs struct {
 	S3                usp_s3.S3Config                                 `json:"s3" yaml:"s3"`
 	Stdin             usp_stdin.StdinConfig                           `json:"stdin" yaml:"stdin"`
 	OnePassword       usp_1password.OnePasswordConfig                 `json:"1password" yaml:"1password"`
-	Bitwarden         usp_bitwarden.BitwardenConfig                   `json:"bitwarden" yaml:"bitwarden"`
+	BeyondTrust         usp_beyondtrust.BeyondTrustConfig                       `json:"beyondtrust" yaml:"beyondtrust"`
+	BeyondTrustPassSafe usp_beyondtrust_passwordsafe.PasswordSafeConfig         `json:"beyondtrust_passwordsafe" yaml:"beyondtrust_passwordsafe"`
+	BeyondTrustPRA      usp_beyondtrust_pra.PRAConfig                           `json:"beyondtrust_pra" yaml:"beyondtrust_pra"`
+	Bitwarden           usp_bitwarden.BitwardenConfig                           `json:"bitwarden" yaml:"bitwarden"`
 	ITGlue            usp_itglue.ITGlueConfig                         `json:"itglue" yaml:"itglue"`
 	Sophos            usp_sophos.SophosConfig                         `json:"sophos" yaml:"sophos"`
 	EntraID           usp_entraid.EntraIDConfig                       `json:"entraid" yaml:"entraid"`
