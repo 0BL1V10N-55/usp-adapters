@@ -11,9 +11,9 @@
 //     adapter signs in via /Auth/SignAppIn, receives a session cookie, and
 //     re-authenticates automatically on HTTP 401.
 //
-// Two feeds are enabled by default: the Activity Log (all user and system
-// actions) and Sessions (privileged-access checkout events). Additional
-// Password Safe endpoints can be added as feeds without changing code.
+// Two feeds are enabled by default: Sessions (privileged-access checkout
+// events) and UserAudits (cross-user audit trail). Additional Password Safe
+// endpoints can be added as feeds without changing code.
 package usp_beyondtrust_passwordsafe
 
 import (
@@ -433,9 +433,9 @@ type PasswordSafeConfig struct {
 
 // defaultFeeds returns the default Password Safe security feeds:
 //
-//   - sessions:  privileged-access checkout sessions (account check-out/in events).
-//   - requests:  credential requests and approvals — who requested access to what
-//     privileged account, whether it was approved or denied, and by whom.
+//   - sessions:    privileged-access checkout sessions (account check-out/in events).
+//   - user_audits: cross-user audit trail — logins, configuration changes, password
+//     retrievals, session requests, approvals, and denials across all users.
 func defaultFeeds() []PasswordSafeFeed {
 	return []PasswordSafeFeed{
 		{
@@ -445,10 +445,11 @@ func defaultFeeds() []PasswordSafeFeed {
 			IDField:        "sessionID",
 		},
 		{
-			Name:           "requests",
-			Path:           "BeyondTrust/api/public/v3/Requests",
-			TimestampField: "requestedDate",
-			IDField:        "requestID",
+			Name:           "user_audits",
+			Path:           "BeyondTrust/api/public/v3/UserAudits",
+			TimestampField: "CreateDate",
+			IDField:        "AuditID",
+			ItemsPath:      "Data",
 		},
 	}
 }
