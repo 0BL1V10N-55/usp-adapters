@@ -132,6 +132,16 @@ added purely through configuration. See [servicenow/README.md](./servicenow/READ
 ./general servicenow client_options.identity.installation_key=e9a3bcdf-efa2-47ae-b6df-579a02f3a54d client_options.identity.oid=8cbe27f4-bfa1-4afb-ba19-138cd51389cd client_options.platform=json client_options.sensor_seed_key=servicenow instance=example username=$SERVICENOW_USERNAME password=$SERVICENOW_PASSWORD
 ```
 
+### Huntress
+
+Pulls Signals (Huntress's unified security-detection feed — Antivirus,
+Footholds, Process Insights, SIEM, Ransomware Canaries, and more) from the
+Huntress REST API. See [huntress/README.md](./huntress/README.md).
+
+```
+./general huntress client_options.identity.installation_key=e9a3bcdf-efa2-47ae-b6df-579a02f3a54d client_options.identity.oid=8cbe27f4-bfa1-4afb-ba19-138cd51389cd client_options.platform=json client_options.sensor_seed_key=huntress api_key=$HUNTRESS_API_KEY api_secret=$HUNTRESS_API_SECRET
+```
+
 ### ThreatLocker
 
 Pulls events from the ThreatLocker Portal API. By default it collects pending

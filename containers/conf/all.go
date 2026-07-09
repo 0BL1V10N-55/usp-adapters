@@ -19,6 +19,7 @@ import (
 	"github.com/refractionPOINT/usp-adapters/gmail"
 	"github.com/refractionPOINT/usp-adapters/harmony"
 	"github.com/refractionPOINT/usp-adapters/hubspot"
+	"github.com/refractionPOINT/usp-adapters/huntress"
 	"github.com/refractionPOINT/usp-adapters/imap"
 	"github.com/refractionPOINT/usp-adapters/itglue"
 	"github.com/refractionPOINT/usp-adapters/k8s_pods"
@@ -90,6 +91,7 @@ type GeneralConfigs struct {
 	ProofpointTap     usp_proofpoint_tap.ProofpointTapConfig          `json:"proofpoint_tap" yaml:"proofpoint_tap"`
 	Box               usp_box.BoxConfig                               `json:"box" yaml:"box"`
 	Sublime           usp_sublime.SublimeConfig                       `json:"sublime" yaml:"sublime"`
+	Huntress          usp_huntress.HuntressConfig                     `json:"huntress" yaml:"huntress"`
 	SentinelOne       usp_sentinelone.SentinelOneConfig               `json:"sentinel_one" yaml:"sentinel_one"`
 	ServiceNow        usp_servicenow.ServiceNowConfig                 `json:"servicenow" yaml:"servicenow"`
 	ThreatLocker      usp_threatlocker.ThreatLockerConfig             `json:"threatlocker" yaml:"threatlocker"`

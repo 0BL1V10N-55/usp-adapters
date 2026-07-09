@@ -33,6 +33,7 @@ import (
 	"github.com/refractionPOINT/usp-adapters/gmail"
 	"github.com/refractionPOINT/usp-adapters/harmony"
 	"github.com/refractionPOINT/usp-adapters/hubspot"
+	"github.com/refractionPOINT/usp-adapters/huntress"
 	"github.com/refractionPOINT/usp-adapters/imap"
 	"github.com/refractionPOINT/usp-adapters/itglue"
 	"github.com/refractionPOINT/usp-adapters/k8s_pods"
@@ -510,6 +511,11 @@ func runAdapter(ctx context.Context, method string, configs Configuration, showC
 		configs.ThreatLocker.ClientOptions.Architecture = "usp_adapter"
 		configToShow = configs.ThreatLocker
 		client, chRunning, err = usp_threatlocker.NewThreatLockerAdapter(ctx, configs.ThreatLocker)
+	} else if method == "huntress" {
+		configs.Huntress.ClientOptions = applyLogging(configs.Huntress.ClientOptions)
+		configs.Huntress.ClientOptions.Architecture = "usp_adapter"
+		configToShow = configs.Huntress
+		client, chRunning, err = usp_huntress.NewHuntressAdapter(ctx, configs.Huntress)
 	} else {
 		return nil, nil, errors.New(logError("unknown adapter_type: %s", method))
 	}
