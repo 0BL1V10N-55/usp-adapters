@@ -42,12 +42,12 @@ type SQSFilesAdapter struct {
 	awsSession *session.Session
 	sqsClient  *sqs.SQS
 
-	// S3
-	isS3Inited    bool
-	awsS3Config   *aws.Config
-	awsS3Session  *session.Session
-	awsS3         *s3.S3
-	awsDownloader *s3manager.Downloader
+	// S3. Cached per bucket: one queue can carry events for buckets in
+	// different regions and a downloader is only valid for its bucket's
+	// region. Guarded by s3Mutex because receiveEvents populates the map
+	// while the processFiles goroutines read from it.
+	s3Mutex     sync.Mutex
+	downloaders map[string]*s3manager.Downloader
 
 	ctx    context.Context
 	isStop bool
@@ -141,9 +141,9 @@ func NewSQSFilesAdapter(ctx context.Context, conf SQSFilesConfig) (*SQSFilesAdap
 
 	a.sqsClient = sqs.New(a.awsSession)
 
-	// The S3 SDK will be initialized at run-time
-	// once we get the first file from an SQS event.
-	a.isS3Inited = false
+	// The S3 SDKs are initialized at run-time, per bucket, as SQS events
+	// name them.
+	a.downloaders = map[string]*s3manager.Downloader{}
 
 	a.chFiles = make(chan fileInfo)
 
@@ -193,33 +193,85 @@ func (a *SQSFilesAdapter) Close() error {
 	return nil
 }
 
+// initS3SDKs makes sure a downloader exists for bucket, resolving the
+// bucket's region once and caching the result.
+//
+// Caching per bucket rather than with a single "already initialized" flag
+// matters twice over: a flag either re-resolves the region on every message
+// (an API round trip each time, and no connection reuse) or pins every
+// bucket to the first one's region. A queue fed by buckets in more than one
+// region needs a downloader per bucket.
 func (a *SQSFilesAdapter) initS3SDKs(bucket string) error {
-	if a.isS3Inited {
+	a.s3Mutex.Lock()
+	defer a.s3Mutex.Unlock()
+
+	if _, ok := a.downloaders[bucket]; ok {
 		return nil
 	}
+
 	region, err := a.getBucketRegion(bucket)
 	if err != nil {
 		return fmt.Errorf("s3.Region: %v", err)
 	}
-	
+
 	// Use the same credentials as SQS (which may already be assumed role credentials)
-	a.awsS3Config = &aws.Config{
+	sess, err := session.NewSession(&aws.Config{
 		Region:      aws.String(region),
 		Credentials: a.awsConfig.Credentials,
-	}
-
-	if a.awsS3Session, err = session.NewSession(a.awsS3Config); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("s3.NewSession(): %v", err)
 	}
 
-	a.awsS3 = s3.New(a.awsS3Session)
-	a.awsDownloader = s3manager.NewDownloader(a.awsS3Session)
-	a.isS3Inited = true
+	a.downloaders[bucket] = s3manager.NewDownloader(sess)
 	return nil
 }
 
+// getDownloader returns the cached downloader for bucket. receiveEvents always
+// calls initS3SDKs before queueing a file, so a miss means the file was queued
+// without initialization.
+func (a *SQSFilesAdapter) getDownloader(bucket string) (*s3manager.Downloader, error) {
+	a.s3Mutex.Lock()
+	defer a.s3Mutex.Unlock()
+
+	d, ok := a.downloaders[bucket]
+	if !ok {
+		return nil, fmt.Errorf("no S3 downloader for bucket %s", bucket)
+	}
+	return d, nil
+}
+
+// getBucketRegion resolves which region a bucket lives in so the downloader
+// talks to the right endpoint.
+//
+// It signs with a.awsConfig.Credentials, which is the assumed-role provider
+// when role_arn is configured and the static keys otherwise. An empty
+// aws.Config would instead fall through to the SDK's default chain --
+// environment, shared config, instance profile, web identity -- so on a host
+// whose ambient AWS config points at a role, this lookup attempts its own STS
+// AssumeRole and fails with "unable to assume role" even though the adapter's
+// configured credentials can read the bucket. It is the one call in this
+// adapter that did not use the configured credentials.
+//
+// A lookup failure is not fatal: the configured region is a reasonable
+// fallback and keeps the adapter running when the credentials are not allowed
+// s3:GetBucketLocation. A wrong fallback surfaces as a per-file S3 error
+// rather than the adapter refusing to start.
 func (a *SQSFilesAdapter) getBucketRegion(bucket string) (string, error) {
-	return s3manager.GetBucketRegion(a.ctx, session.Must(session.NewSession(&aws.Config{})), bucket, "us-east-1")
+	sess, err := session.NewSession(&aws.Config{
+		Region:      aws.String(a.conf.Region),
+		Credentials: a.awsConfig.Credentials,
+	})
+	if err != nil {
+		return "", fmt.Errorf("s3.NewSession(): %v", err)
+	}
+
+	region, err := s3manager.GetBucketRegion(a.ctx, sess, bucket, a.conf.Region)
+	if err != nil {
+		a.conf.ClientOptions.OnWarning(fmt.Sprintf("s3.GetBucketRegion(%s): %v, falling back to configured region %s", bucket, err, a.conf.Region))
+		return a.conf.Region, nil
+	}
+	return region, nil
 }
 
 func (a *SQSFilesAdapter) assumeRole(roleArn, externalId string) (*credentials.Credentials, error) {
@@ -328,12 +380,18 @@ func (a *SQSFilesAdapter) processFiles() error {
 				continue
 			}
 		}
+		downloader, err := a.getDownloader(f.bucket)
+		if err != nil {
+			a.conf.ClientOptions.OnError(err)
+			continue
+		}
+
 		startTime := time.Now().UTC()
 		a.conf.ClientOptions.DebugLog(fmt.Sprintf("downloading file %s", path))
 
 		writerAt := aws.NewWriteAtBuffer([]byte{})
 
-		if _, err := a.awsDownloader.Download(writerAt, &s3.GetObjectInput{
+		if _, err := downloader.Download(writerAt, &s3.GetObjectInput{
 			Bucket: aws.String(f.bucket),
 			Key:    aws.String(path),
 		}); err != nil {
@@ -353,7 +411,9 @@ func (a *SQSFilesAdapter) processFiles() error {
 			a.conf.ClientOptions.DebugLog(fmt.Sprintf("CloudTrail splitting enabled for %s", path))
 			records, err := a.splitCloudTrailRecords(writerAt.Bytes())
 			if err != nil {
-				a.conf.ClientOptions.DebugLog(fmt.Sprintf("failed to split CloudTrail records from %s: %v", path, err))
+				// Warn rather than debug: splitting was asked for and did not
+				// happen, and the fall-through ships the file as one line.
+				a.conf.ClientOptions.OnWarning(fmt.Sprintf("failed to split CloudTrail records from %s: %v", path, err))
 			} else if len(records) > 0 {
 				a.conf.ClientOptions.DebugLog(fmt.Sprintf("split %d CloudTrail records from %s", len(records), path))
 				for i, record := range records {
@@ -363,9 +423,19 @@ func (a *SQSFilesAdapter) processFiles() error {
 				}
 				continue
 			} else {
-				a.conf.ClientOptions.DebugLog(fmt.Sprintf("no CloudTrail records found in %s, processing as regular file", path))
+				a.conf.ClientOptions.OnWarning(fmt.Sprintf("no CloudTrail records found in %s, processing as regular file", path))
 			}
 			// If splitting failed or returned no records, fall through to process as normal file
+		}
+
+		// Whatever reaches here is shipped as a single bundle payload, so a
+		// CloudTrail file that was not split is one enormous line. The proxy
+		// rejects an oversized line by dropping the connection before acking,
+		// which makes the uspclient retransmit it on every reconnect and stalls
+		// the adapter for good. Skipping the one file keeps ingestion alive.
+		if err := utils.CheckMaxLineSize(path, writerAt.Bytes(), isCompressed); err != nil {
+			a.conf.ClientOptions.OnError(err)
+			continue
 		}
 
 		a.processEvent(writerAt.Bytes(), isCompressed)
@@ -386,9 +456,16 @@ func (a *SQSFilesAdapter) splitCloudTrailRecords(data []byte) ([][]byte, error) 
 		}
 		defer gr.Close()
 
-		decompressed, err := io.ReadAll(gr)
+		// Bounded: this materializes the decompressed object, and CloudTrail
+		// files of a flood of near-identical events compress hundreds-to-one,
+		// so an unbounded read here is what turns a small object into a
+		// multi-hundred-MB allocation (and a gzip bomb into an OOM).
+		decompressed, err := io.ReadAll(io.LimitReader(gr, utils.MaxDecompressedSize+1))
 		if err != nil {
 			return nil, fmt.Errorf("failed to decompress gzip data: %v", err)
+		}
+		if int64(len(decompressed)) > utils.MaxDecompressedSize {
+			return nil, fmt.Errorf("decompressed size exceeds %d bytes", int64(utils.MaxDecompressedSize))
 		}
 		data = decompressed
 	}
