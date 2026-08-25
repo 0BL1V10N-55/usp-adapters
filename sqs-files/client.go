@@ -36,12 +36,12 @@ type SQSFilesAdapter struct {
 	awsSession *session.Session
 	sqsClient  *sqs.SQS
 
-	// S3
-	isS3Inited    bool
-	awsS3Config   *aws.Config
-	awsS3Session  *session.Session
-	awsS3         *s3.S3
-	awsDownloader *s3manager.Downloader
+	// S3. Cached per bucket: a single queue can carry events for buckets in
+	// different regions, and a downloader is only valid for its bucket's
+	// region. Guarded by s3Mutex because receiveEvents populates the map
+	// while the processFiles goroutines read from it.
+	s3Mutex     sync.Mutex
+	downloaders map[string]*s3manager.Downloader
 
 	ctx    context.Context
 	isStop bool
@@ -102,8 +102,9 @@ func NewSQSFilesAdapter(ctx context.Context, conf SQSFilesConfig) (*SQSFilesAdap
 	}
 
 	a := &SQSFilesAdapter{
-		conf: conf,
-		ctx:  context.Background(),
+		conf:        conf,
+		ctx:         context.Background(),
+		downloaders: map[string]*s3manager.Downloader{},
 	}
 
 	var err error
@@ -120,9 +121,8 @@ func NewSQSFilesAdapter(ctx context.Context, conf SQSFilesConfig) (*SQSFilesAdap
 
 	a.sqsClient = sqs.New(a.awsSession)
 
-	// The S3 SDK will be initialized at run-time
-	// once we get the first file from an SQS event.
-	a.isS3Inited = false
+	// The S3 SDKs are initialized at run-time, per bucket, as SQS events
+	// name them.
 
 	a.chFiles = make(chan fileInfo)
 
@@ -169,30 +169,80 @@ func (a *SQSFilesAdapter) Close() error {
 	return nil
 }
 
+// initS3SDKs makes sure a downloader exists for bucket, resolving the
+// bucket's region once and caching the result. Without the cache every SQS
+// message paid for a fresh GetBucketRegion call and rebuilt the session,
+// which is both a per-message round trip and a throttling risk at volume.
 func (a *SQSFilesAdapter) initS3SDKs(bucket string) error {
-	if a.isS3Inited {
+	a.s3Mutex.Lock()
+	defer a.s3Mutex.Unlock()
+
+	if _, ok := a.downloaders[bucket]; ok {
 		return nil
 	}
+
 	region, err := a.getBucketRegion(bucket)
 	if err != nil {
 		return fmt.Errorf("s3.Region: %v", err)
 	}
-	a.awsS3Config = &aws.Config{
+
+	// The downloader must use the bucket's region, not the region the SQS
+	// queue happens to live in.
+	sess, err := session.NewSession(&aws.Config{
 		Region:      aws.String(region),
 		Credentials: credentials.NewStaticCredentials(a.conf.AccessKey, a.conf.SecretKey, ""),
-	}
-
-	if a.awsS3Session, err = session.NewSession(a.awsS3Config); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("s3.NewSession(): %v", err)
 	}
 
-	a.awsS3 = s3.New(a.awsSession)
-	a.awsDownloader = s3manager.NewDownloader(a.awsS3Session)
+	a.downloaders[bucket] = s3manager.NewDownloader(sess)
 	return nil
 }
 
+// getDownloader returns the cached downloader for bucket. receiveEvents
+// always calls initS3SDKs before queueing a file, so a miss means the file
+// was queued without initialization.
+func (a *SQSFilesAdapter) getDownloader(bucket string) (*s3manager.Downloader, error) {
+	a.s3Mutex.Lock()
+	defer a.s3Mutex.Unlock()
+
+	d, ok := a.downloaders[bucket]
+	if !ok {
+		return nil, fmt.Errorf("no S3 downloader for bucket %s", bucket)
+	}
+	return d, nil
+}
+
+// getBucketRegion resolves which region a bucket lives in so the downloader
+// talks to the right endpoint.
+//
+// It must use the adapter's own configured credentials. An empty aws.Config
+// falls through to the SDK's default chain -- environment, shared config,
+// instance profile, web identity -- so on a host whose ambient AWS config
+// points at a role, this lookup attempts an STS AssumeRole and fails with
+// "unable to assume role", even though the configured keys can read the
+// bucket perfectly well.
+//
+// A lookup failure is not fatal. The configured region is a reasonable
+// fallback and keeps the adapter running when the credentials are not allowed
+// s3:GetBucketLocation. If that fallback is wrong, the per-file download fails
+// with a clear S3 error instead of the adapter refusing to start.
 func (a *SQSFilesAdapter) getBucketRegion(bucket string) (string, error) {
-	return s3manager.GetBucketRegion(a.ctx, session.Must(session.NewSession(&aws.Config{})), bucket, "us-east-1")
+	sess, err := session.NewSession(&aws.Config{
+		Region:      aws.String(a.conf.Region),
+		Credentials: credentials.NewStaticCredentials(a.conf.AccessKey, a.conf.SecretKey, ""),
+	})
+	if err != nil {
+		return "", fmt.Errorf("s3.NewSession(): %v", err)
+	}
+
+	region, err := s3manager.GetBucketRegion(a.ctx, sess, bucket, a.conf.Region)
+	if err != nil {
+		a.conf.ClientOptions.OnWarning(fmt.Sprintf("s3.GetBucketRegion(%s): %v, falling back to configured region %s", bucket, err, a.conf.Region))
+		return a.conf.Region, nil
+	}
+	return region, nil
 }
 
 func (a *SQSFilesAdapter) receiveEvents() error {
@@ -279,12 +329,18 @@ func (a *SQSFilesAdapter) processFiles() error {
 				continue
 			}
 		}
+		downloader, err := a.getDownloader(f.bucket)
+		if err != nil {
+			a.conf.ClientOptions.OnError(err)
+			continue
+		}
+
 		startTime := time.Now().UTC()
 		a.conf.ClientOptions.DebugLog(fmt.Sprintf("downloading file %s", path))
 
 		writerAt := aws.NewWriteAtBuffer([]byte{})
 
-		if _, err := a.awsDownloader.Download(writerAt, &s3.GetObjectInput{
+		if _, err := downloader.Download(writerAt, &s3.GetObjectInput{
 			Bucket: aws.String(f.bucket),
 			Key:    aws.String(path),
 		}); err != nil {
