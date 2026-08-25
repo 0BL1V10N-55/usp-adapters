@@ -3,6 +3,7 @@ package utils
 import (
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -75,9 +76,17 @@ func gunzip(data []byte, limit int64) ([]byte, error) {
 //   - Gzipped parquet (e.g. *.parquet.gz from Athena UNLOAD or
 //     Firehose): gunzipped, then decoded, then returned uncompressed.
 //   - Other gzipped objects (*.gz that aren't parquet underneath):
-//     returned untouched with isCompressed=true so the proxy gunzips,
-//     matching pre-parquet behaviour.
+//     measured for line length, then returned untouched with
+//     isCompressed=true so the proxy gunzips, matching pre-parquet
+//     behaviour.
 //   - Everything else: returned untouched with isCompressed=false.
+//
+// Objects whose longest line would exceed MaxBundleLineSize get one more
+// step, because shipping them as-is wedges the adapter permanently rather
+// than failing just that file (see MaxBundleLineSize). CloudTrail-shaped
+// objects are split into one line per record and returned gzipped, which
+// makes them ingestible; anything else oversized returns ErrLineTooLarge so
+// the caller skips the single file and keeps the connection healthy.
 //
 // The name parameter is used for extension hints and for error context;
 // pass the object key/path the adapter knows it by.
@@ -100,7 +109,24 @@ func PrepareBundleData(name string, rawData []byte) (data []byte, isCompressed b
 			}
 			return converted, false, nil
 		}
-		return rawData, true, nil
+
+		// Measuring streams the gunzipped bytes and discards them, so this
+		// costs one decompression pass but no extra memory. Only when a line
+		// is genuinely over the cap do we pay for the full rewrite.
+		longest, lineErr := longestLineFromGzip(rawData)
+		if lineErr != nil {
+			return nil, false, fmt.Errorf("scan %s: %w", name, lineErr)
+		}
+		if longest <= MaxBundleLineSize {
+			return rawData, true, nil
+		}
+
+		zr, zErr := gzip.NewReader(bytes.NewReader(rawData))
+		if zErr != nil {
+			return nil, false, fmt.Errorf("gunzip %s: %w", name, zErr)
+		}
+		defer zr.Close()
+		return splitCloudTrail(name, zr, longest)
 	}
 
 	if IsParquetFile(name, rawData) {
@@ -111,5 +137,29 @@ func PrepareBundleData(name string, rawData []byte) (data []byte, isCompressed b
 		return converted, false, nil
 	}
 
+	if longest := longestLine(rawData); longest > MaxBundleLineSize {
+		return splitCloudTrail(name, bytes.NewReader(rawData), longest)
+	}
+
 	return rawData, false, nil
+}
+
+// splitCloudTrail is the last-resort path for an object with a line the proxy
+// would reject. It returns gzipped newline-delimited records on success, and
+// ErrLineTooLarge when the object is not CloudTrail-shaped and therefore has
+// no record boundary to split on.
+func splitCloudTrail(name string, r io.Reader, longest int) ([]byte, bool, error) {
+	out := bytes.Buffer{}
+	zw := gzip.NewWriter(&out)
+	_, ctErr := CloudTrailToJSONLines(r, zw)
+	if ctErr != nil {
+		if errors.Is(ctErr, ErrNotCloudTrail) {
+			return nil, false, fmt.Errorf("%w: %s has a line of %d bytes, max %d", ErrLineTooLarge, name, longest, MaxBundleLineSize)
+		}
+		return nil, false, fmt.Errorf("cloudtrail split %s: %w", name, ctErr)
+	}
+	if err := zw.Close(); err != nil {
+		return nil, false, fmt.Errorf("gzip %s: %w", name, err)
+	}
+	return out.Bytes(), true, nil
 }

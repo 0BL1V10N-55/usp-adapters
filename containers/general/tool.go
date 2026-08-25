@@ -30,6 +30,7 @@ import (
 	"github.com/refractionPOINT/usp-adapters/falconcloud"
 	"github.com/refractionPOINT/usp-adapters/file"
 	"github.com/refractionPOINT/usp-adapters/gcs"
+	"github.com/refractionPOINT/usp-adapters/gmail"
 	"github.com/refractionPOINT/usp-adapters/harmony"
 	"github.com/refractionPOINT/usp-adapters/hubspot"
 	"github.com/refractionPOINT/usp-adapters/imap"
@@ -45,6 +46,7 @@ import (
 	"github.com/refractionPOINT/usp-adapters/pubsub"
 	"github.com/refractionPOINT/usp-adapters/s3"
 	"github.com/refractionPOINT/usp-adapters/sentinelone"
+	"github.com/refractionPOINT/usp-adapters/servicenow"
 	"github.com/refractionPOINT/usp-adapters/simulator"
 	"github.com/refractionPOINT/usp-adapters/slack"
 	"github.com/refractionPOINT/usp-adapters/sophos"
@@ -53,6 +55,7 @@ import (
 	"github.com/refractionPOINT/usp-adapters/stdin"
 	"github.com/refractionPOINT/usp-adapters/sublime"
 	"github.com/refractionPOINT/usp-adapters/syslog"
+	"github.com/refractionPOINT/usp-adapters/threatlocker"
 	"github.com/refractionPOINT/usp-adapters/trendmicro"
 	"github.com/refractionPOINT/usp-adapters/wel"
 	"github.com/refractionPOINT/usp-adapters/wiz"
@@ -432,6 +435,11 @@ func runAdapter(ctx context.Context, method string, configs Configuration, showC
 		configs.Imap.ClientOptions.Architecture = "usp_adapter"
 		configToShow = configs.Imap
 		client, chRunning, err = usp_imap.NewImapAdapter(ctx, configs.Imap)
+	} else if method == "gmail" {
+		configs.Gmail.ClientOptions = applyLogging(configs.Gmail.ClientOptions)
+		configs.Gmail.ClientOptions.Architecture = "usp_adapter"
+		configToShow = configs.Gmail
+		client, chRunning, err = usp_gmail.NewGmailAdapter(ctx, configs.Gmail)
 	} else if method == "hubspot" {
 		configs.HubSpot.ClientOptions = applyLogging(configs.HubSpot.ClientOptions)
 		configs.HubSpot.ClientOptions.Architecture = "usp_adapter"
@@ -492,6 +500,16 @@ func runAdapter(ctx context.Context, method string, configs Configuration, showC
 		configs.TrendMicro.ClientOptions.Architecture = "usp_adapter"
 		configToShow = configs.TrendMicro
 		client, chRunning, err = usp_trendmicro.NewTrendMicroAdapter(ctx, configs.TrendMicro)
+	} else if method == "servicenow" {
+		configs.ServiceNow.ClientOptions = applyLogging(configs.ServiceNow.ClientOptions)
+		configs.ServiceNow.ClientOptions.Architecture = "usp_adapter"
+		configToShow = configs.ServiceNow
+		client, chRunning, err = usp_servicenow.NewServiceNowAdapter(ctx, configs.ServiceNow)
+	} else if method == "threatlocker" {
+		configs.ThreatLocker.ClientOptions = applyLogging(configs.ThreatLocker.ClientOptions)
+		configs.ThreatLocker.ClientOptions.Architecture = "usp_adapter"
+		configToShow = configs.ThreatLocker
+		client, chRunning, err = usp_threatlocker.NewThreatLockerAdapter(ctx, configs.ThreatLocker)
 	} else {
 		return nil, nil, errors.New(logError("unknown adapter_type: %s", method))
 	}
