@@ -31,6 +31,12 @@ type SQSFilesAdapter struct {
 
 	chFiles chan fileInfo
 
+	// Every AWS call in this adapter signs with this one provider. Holding it
+	// in a field rather than rebuilding static credentials at each call site
+	// means an auth mode that does not use access_key/secret_key -- IAM Roles
+	// Anywhere, say -- only has to change how this is constructed.
+	awsCreds *credentials.Credentials
+
 	// SQS
 	awsConfig  *aws.Config
 	awsSession *session.Session
@@ -109,10 +115,12 @@ func NewSQSFilesAdapter(ctx context.Context, conf SQSFilesConfig) (*SQSFilesAdap
 
 	var err error
 
+	a.awsCreds = credentials.NewStaticCredentials(conf.AccessKey, conf.SecretKey, "")
+
 	// SQS
 	a.awsConfig = &aws.Config{
 		Region:      aws.String(conf.Region),
-		Credentials: credentials.NewStaticCredentials(conf.AccessKey, conf.SecretKey, ""),
+		Credentials: a.awsCreds,
 	}
 
 	if a.awsSession, err = session.NewSession(a.awsConfig); err != nil {
@@ -190,7 +198,7 @@ func (a *SQSFilesAdapter) initS3SDKs(bucket string) error {
 	// queue happens to live in.
 	sess, err := session.NewSession(&aws.Config{
 		Region:      aws.String(region),
-		Credentials: credentials.NewStaticCredentials(a.conf.AccessKey, a.conf.SecretKey, ""),
+		Credentials: a.awsCreds,
 	})
 	if err != nil {
 		return fmt.Errorf("s3.NewSession(): %v", err)
@@ -217,12 +225,12 @@ func (a *SQSFilesAdapter) getDownloader(bucket string) (*s3manager.Downloader, e
 // getBucketRegion resolves which region a bucket lives in so the downloader
 // talks to the right endpoint.
 //
-// It must use the adapter's own configured credentials. An empty aws.Config
-// falls through to the SDK's default chain -- environment, shared config,
-// instance profile, web identity -- so on a host whose ambient AWS config
-// points at a role, this lookup attempts an STS AssumeRole and fails with
-// "unable to assume role", even though the configured keys can read the
-// bucket perfectly well.
+// It must sign with the adapter's own credentials. An empty aws.Config falls
+// through to the SDK's default chain -- environment, shared config, instance
+// profile, web identity -- so on a host whose ambient AWS config points at a
+// role, this lookup attempts an STS AssumeRole and fails with "unable to
+// assume role", even though the adapter's own credentials can read the bucket
+// perfectly well.
 //
 // A lookup failure is not fatal. The configured region is a reasonable
 // fallback and keeps the adapter running when the credentials are not allowed
@@ -231,7 +239,7 @@ func (a *SQSFilesAdapter) getDownloader(bucket string) (*s3manager.Downloader, e
 func (a *SQSFilesAdapter) getBucketRegion(bucket string) (string, error) {
 	sess, err := session.NewSession(&aws.Config{
 		Region:      aws.String(a.conf.Region),
-		Credentials: credentials.NewStaticCredentials(a.conf.AccessKey, a.conf.SecretKey, ""),
+		Credentials: a.awsCreds,
 	})
 	if err != nil {
 		return "", fmt.Errorf("s3.NewSession(): %v", err)
