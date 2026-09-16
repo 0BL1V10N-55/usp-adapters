@@ -17,3 +17,8 @@
 
 #intellij
 .idea/
+
+# Client-facing provisioning guides (deliverables, not adapter source)
+*-provisioning-guide.md
+*-provisioning-guide.pdf
+*-provisioning-guide.html
