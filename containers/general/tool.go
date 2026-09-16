@@ -30,6 +30,7 @@ import (
 	"github.com/refractionPOINT/usp-adapters/falconcloud"
 	"github.com/refractionPOINT/usp-adapters/file"
 	"github.com/refractionPOINT/usp-adapters/gcs"
+	"github.com/refractionPOINT/usp-adapters/gitlab"
 	"github.com/refractionPOINT/usp-adapters/hubspot"
 	"github.com/refractionPOINT/usp-adapters/imap"
 	"github.com/refractionPOINT/usp-adapters/itglue"
@@ -486,6 +487,11 @@ func runAdapter(ctx context.Context, method string, configs Configuration, showC
 		configs.TrendMicro.ClientOptions.Architecture = "usp_adapter"
 		configToShow = configs.TrendMicro
 		client, chRunning, err = usp_trendmicro.NewTrendMicroAdapter(ctx, configs.TrendMicro)
+	} else if method == "gitlab" {
+		configs.GitLab.ClientOptions = applyLogging(configs.GitLab.ClientOptions)
+		configs.GitLab.ClientOptions.Architecture = "usp_adapter"
+		configToShow = configs.GitLab
+		client, chRunning, err = usp_gitlab.NewGitLabAdapter(ctx, configs.GitLab)
 	} else {
 		return nil, nil, errors.New(logError("unknown adapter_type: %s", method))
 	}
